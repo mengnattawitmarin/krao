@@ -1,0 +1,89 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # ลายนิ้วมือใบรับรองของ tool/signing/test.keystore — APK ทุก build ต้องเซ็นด้วยคีย์นี้ เพื่อให้ติดตั้งทับกันได้
+      EXPECTED_CERT_SHA256: 6b291fd44ea49c3cbaaeff163449a0adf8fc3d23c3ccb5b7e7abe8a8bea37f27
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Create Android project + patch
+        run: |
+          flutter --version
+          flutter create --org th.krao --project-name krao --platforms android .
+          python3 tool/patch_android.py
+
+      - name: Analyze
+        run: |
+          set -o pipefail
+          flutter pub get
+          if ! flutter analyze --no-fatal-infos 2>&1 | tee analyze.txt; then
+            grep -E "^\s*(error|warning)" analyze.txt | head -40 | sed 's/^\s*/::error title=analyze::/'
+            exit 1
+          fi
+
+      - name: Test
+        run: |
+          set -o pipefail
+          if ! flutter test 2>&1 | tee test.txt; then
+            grep -E "(Expected|Actual|Error|error:|FAILED|\[E\])" test.txt | head -40 | sed 's/^/::error title=test::/'
+            exit 1
+          fi
+
+      - name: Build APK
+        run: |
+          set -o pipefail
+          if ! flutter build apk --release --build-number=${{ github.run_number }} 2>&1 | tee build.txt; then
+            grep -E "(^e: |error:|FAILURE|What went wrong|\.kt:)" build.txt | head -40 | sed 's/^/::error title=build::/'
+            exit 1
+          fi
+
+      - name: Verify signature
+        run: |
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
+          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | tee certs.txt
+          if ! grep -qi "SHA-256 digest: $EXPECTED_CERT_SHA256" certs.txt; then
+            echo "::error title=signing::APK ไม่ได้เซ็นด้วย tool/signing/test.keystore — ติดตั้งทับแอปเดิมไม่ได้"
+            exit 1
+          fi
+          cp build/app/outputs/flutter-apk/app-release.apk "krao-build-${{ github.run_number }}.apk"
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: เกราะ build ${{ github.run_number }}
+          make_latest: true
+          body: |
+            APK ทดสอบของเกราะ (commit ${{ github.sha }})
+            ดาวน์โหลดไฟล์ .apk ด้านล่าง → เปิดบนมือถือ Android 8 ขึ้นไป → อนุญาตติดตั้งจากเบราว์เซอร์/ไฟล์
+            เซ็นด้วยคีย์ทดสอบ (ติดตั้งทับ build ก่อนหน้าได้) — ยังไม่ใช่รุ่นขึ้น Play Store
+          files: krao-build-${{ github.run_number }}.apk

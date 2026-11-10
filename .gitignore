@@ -1,0 +1,24 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+/build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+pubspec.lock
+
+# สร้างใหม่ทุก build บน CI (แก้ native ที่ native/android/)
+/android/
+/ios/
+/linux/
+/macos/
+/windows/
+/web/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
